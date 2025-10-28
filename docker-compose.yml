@@ -122,6 +122,54 @@ services:
       - ocr
 
   # =========================================================================
+  # CHANDRA OCR MODEL (datalab-to/chandra)
+  # Advanced vision OCR with superior table/handwriting recognition
+  # Access via: http://localhost:8001/chandra/v1/...
+  # =========================================================================
+  vllm-chandra:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-chandra
+    networks:
+      - default              # TEMP: Allow internet to download model
+      # - vllm-internal      # NO internet access (internal=true) - ENABLE AFTER FIRST RUN
+      - llamaindex_internal  # Accessible from LlamaIndex
+    volumes:
+      - ./models:/root/.cache/huggingface
+    environment:
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - DO_NOT_TRACK=1
+      - VLLM_USAGE_SOURCE=production-docker-isolated
+      # - HF_HUB_OFFLINE=1      # TEMP DISABLED - allow download
+      # - TRANSFORMERS_OFFLINE=1  # TEMP DISABLED - allow download
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    command: >
+      --model datalab-to/chandra
+      --served-model-name datalab-to/chandra
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 32768
+      --gpu-memory-utilization 0.45
+      --trust-remote-code
+      --max-num-seqs 8
+      --enforce-eager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    profiles:
+      - chandra
+
+  # =========================================================================
   # TEXT MODEL (Qwen2.5-1.5B-Instruct)
   # General text generation and chat
   # Access via: http://localhost:8001/text/v1/...
