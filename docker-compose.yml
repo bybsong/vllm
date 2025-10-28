@@ -1,0 +1,190 @@
+version: '3.8'
+
+# Network architecture following vLLM best practices
+# - internal: NO internet access (production serving)
+# - external: Has internet (for initial setup only)
+# - default: Docker's default bridge (allows port exposure)
+# - llamaindex_internal: Shared network with LlamaIndex (external reference)
+networks:
+  vllm-internal:
+    driver: bridge
+    internal: true  # NO internet access - secure production network
+  vllm-external:
+    driver: bridge  # Has internet for downloads
+  llamaindex_internal:
+    external: true
+    name: llamaindex_internal
+  default:
+    # Uses docker-compose's default bridge network (allows port exposure)
+
+services:
+  # =========================================================================
+  # MODEL DOWNLOADER (ONE-TIME USE)
+  # Downloads models with internet access, then exits
+  # Run once: docker-compose up model-downloader
+  # =========================================================================
+  model-downloader:
+    image: alpine:latest
+    container_name: vllm-model-downloader
+    networks:
+      - vllm-external  # Has internet for downloads
+    volumes:
+      - ./models:/models
+    environment:
+      - MODEL_NAME=nanonets/Nanonets-OCR2-3B
+    command: |
+      sh -c '
+        echo "============================================"
+        echo "vLLM Model Downloader"
+        echo "============================================"
+        echo ""
+        echo "Installing git and git-lfs..."
+        apk add --no-cache git git-lfs curl
+        
+        cd /models
+        
+        # Check if model already exists
+        if [ -d "nanonets--Nanonets-OCR2-3B" ]; then
+          echo "Model already downloaded!"
+          echo "Location: /models/nanonets--Nanonets-OCR2-3B"
+          exit 0
+        fi
+        
+        echo ""
+        echo "Downloading model: $$MODEL_NAME"
+        echo "This may take 10-20 minutes (6-8GB)..."
+        echo ""
+        
+        git lfs install
+        GIT_LFS_SKIP_SMUDGE=0 git clone https://huggingface.co/$$MODEL_NAME nanonets--Nanonets-OCR2-3B
+        
+        echo ""
+        echo "============================================"
+        echo "✓ Model downloaded successfully!"
+        echo "============================================"
+        echo ""
+        echo "Location: /models/nanonets--Nanonets-OCR2-3B"
+        echo "Size: $$(du -sh nanonets--Nanonets-OCR2-3B | cut -f1)"
+        echo ""
+        echo "You can now start the serving containers:"
+        echo "  docker-compose up -d vllm-nanonets-ocr nginx-gateway"
+        echo ""
+      '
+    restart: "no"  # Run once and exit
+    profiles:
+      - setup  # Only runs when explicitly called
+
+  # =========================================================================
+  # OCR MODEL (Nanonets-OCR2-3B)
+  # Vision model for document OCR
+  # Access via: http://localhost:8001/ocr/v1/...
+  # =========================================================================
+  vllm-ocr:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-ocr
+    networks:
+      - vllm-internal        # NO internet access (internal=true)
+      - llamaindex_internal  # Accessible from LlamaIndex
+    volumes:
+      - ./models:/root/.cache/huggingface
+    environment:
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - DO_NOT_TRACK=1
+      - VLLM_USAGE_SOURCE=production-docker-isolated
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    command: >
+      --model /root/.cache/huggingface/nanonets--Nanonets-OCR2-3B
+      --served-model-name nanonets/Nanonets-OCR2-3B
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 15000
+      --gpu-memory-utilization 0.45
+      --trust-remote-code
+      --max-num-seqs 5
+      --enforce-eager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    profiles:
+      - ocr
+
+  # =========================================================================
+  # TEXT MODEL (Qwen2.5-1.5B-Instruct)
+  # General text generation and chat
+  # Access via: http://localhost:8001/text/v1/...
+  # =========================================================================
+  vllm-text:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-text
+    networks:
+      - vllm-internal  # NO internet access (internal=true)
+    volumes:
+      - ./models:/root/.cache/huggingface
+    environment:
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - DO_NOT_TRACK=1
+      - VLLM_USAGE_SOURCE=production-docker-isolated
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    command: >
+      --model Qwen/Qwen2.5-1.5B-Instruct
+      --served-model-name Qwen/Qwen2.5-1.5B-Instruct
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 4096
+      --gpu-memory-utilization 0.45
+      --enforce-eager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    profiles:
+      - text
+
+  # =========================================================================
+  # NGINX GATEWAY (EXTERNAL ACCESS POINT)
+  # Single gateway for all vLLM models
+  # Routes traffic based on URL path:
+  #   - /ocr/v1/*  → vllm-ocr
+  #   - /text/v1/* → vllm-text
+  # =========================================================================
+  nginx-gateway:
+    image: nginx:alpine
+    container_name: vllm-gateway
+    ports:
+      - "8001:80"  # Single port for all models
+    networks:
+      - default        # Allows port exposure to host
+      - vllm-internal  # Can talk to vllm containers
+    volumes:
+      - ./nginx-config/nginx-multi-model.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
