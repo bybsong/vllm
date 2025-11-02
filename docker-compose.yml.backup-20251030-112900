@@ -29,7 +29,7 @@ services:
     networks:
       - vllm-external  # Has internet for downloads
     volumes:
-      - C:\Users\bybso\vllm\models:/models
+      - ./models:/models
     environment:
       - MODEL_NAME=nanonets/Nanonets-OCR2-3B
     command: |
@@ -86,7 +86,7 @@ services:
       - vllm-internal        # NO internet access (internal=true)
       - llamaindex_internal  # Accessible from LlamaIndex
     volumes:
-      - C:\Users\bybso\vllm\models:/root/.cache/huggingface
+      - ./models:/root/.cache/huggingface
     environment:
       - HF_HUB_DISABLE_TELEMETRY=1
       - DO_NOT_TRACK=1
@@ -134,7 +134,7 @@ services:
       # - vllm-internal      # NO internet access (internal=true) - ENABLE AFTER FIRST RUN
       - llamaindex_internal  # Accessible from LlamaIndex
     volumes:
-      - C:\Users\bybso\vllm\models:/root/.cache/huggingface
+      - ./models:/root/.cache/huggingface
     environment:
       - HF_HUB_DISABLE_TELEMETRY=1
       - DO_NOT_TRACK=1
@@ -177,17 +177,19 @@ services:
   vllm-text:
     image: vllm/vllm-openai:latest
     container_name: vllm-text
+    ports:
+      - "8003:8000"  # Direct access for testing
     networks:
-      - vllm-internal        # NO internet access (internal=true)
-      - llamaindex_internal  # Accessible from LlamaIndex
+      - default  # TEMP: Allow internet to download model
+      # - vllm-internal  # NO internet access - ENABLE AFTER FIRST RUN
     volumes:
-      - C:\Users\bybso\vllm\models\hub:/root/.cache/huggingface/hub
+      - ./models:/root/.cache/huggingface
     environment:
       - HF_HUB_DISABLE_TELEMETRY=1
       - DO_NOT_TRACK=1
       - VLLM_USAGE_SOURCE=production-docker-isolated
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
+      # - HF_HUB_OFFLINE=1  # TEMP DISABLED
+      # - TRANSFORMERS_OFFLINE=1  # TEMP DISABLED
     deploy:
       resources:
         reservations:
@@ -215,71 +217,27 @@ services:
       - text
 
   # =========================================================================
-  # TEXT MODEL (Qwen3-30B-A3B-Instruct-FP8)
-  # High-quality MoE text model with FP8 quantization
-  # 30.5B total params, 3.3B active - faster than 14B dense!
-  # FP8 optimized for RTX 5090 Blackwell architecture
-  # Access via: vllm-text-30b:8000 (internal only)
-  # =========================================================================
-  vllm-text-30b:
-    image: vllm/vllm-openai:latest
-    container_name: vllm-text-30b
-    networks:
-      - vllm-internal        # NO internet access (internal=true)
-      - llamaindex_internal  # Accessible from LlamaIndex
-    volumes:
-      - C:\Users\bybso\vllm\models:/root/.cache/huggingface
-    environment:
-      - HF_HUB_DISABLE_TELEMETRY=1
-      - DO_NOT_TRACK=1
-      - VLLM_USAGE_SOURCE=production-docker-isolated
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    ipc: host
-    command: >
-      --model /root/.cache/huggingface/Qwen--Qwen3-30B-A3B-Instruct-2507-FP8
-      --served-model-name Qwen/Qwen3-30B-A3B-Instruct
-      --host 0.0.0.0
-      --port 8000
-      --max-model-len 16384
-      --gpu-memory-utilization 0.80
-      --enforce-eager
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    profiles:
-      - text-30b
-
-  # =========================================================================
-  # TEXT MODEL (Qwen3-14B-Instruct) - NOT CONFIGURED
-  # This model doesn't fit in 32GB VRAM at full precision
-  # Use Qwen3-30B-A3B-FP8 (above) instead - it's faster and better!
+  # TEXT MODEL (Qwen3-14B-Instruct)
+  # High-quality Qwen3 text model - excellent balance of speed and accuracy
+  # 2-3x better performance than 4B on reasoning/coding tasks
+  # Access via: http://localhost:8004/v1/...
   # =========================================================================
   vllm-text-14b:
     image: vllm/vllm-openai:latest
     container_name: vllm-text-14b
+    ports:
+      - "8004:8000"  # Direct access for testing
     networks:
-      - vllm-internal        # NO internet access (internal=true)
-      - llamaindex_internal  # Accessible from LlamaIndex
+      - default  # TEMP: Allow internet to download model
+      # - vllm-internal  # NO internet access - ENABLE AFTER FIRST RUN
     volumes:
-      - C:\Users\bybso\vllm\models:/root/.cache/huggingface
+      - ./models:/root/.cache/huggingface
     environment:
       - HF_HUB_DISABLE_TELEMETRY=1
       - DO_NOT_TRACK=1
       - VLLM_USAGE_SOURCE=production-docker-isolated
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
+      # - HF_HUB_OFFLINE=1  # TEMP DISABLED
+      # - TRANSFORMERS_OFFLINE=1  # TEMP DISABLED
     deploy:
       resources:
         reservations:
@@ -289,12 +247,12 @@ services:
               capabilities: [gpu]
     ipc: host
     command: >
-      --model /root/.cache/huggingface/Qwen--Qwen3-14B
+      --model Qwen/Qwen3-14B
       --served-model-name Qwen/Qwen3-14B
       --host 0.0.0.0
       --port 8000
-      --max-model-len 16384
-      --gpu-memory-utilization 0.75
+      --max-model-len 32768
+      --gpu-memory-utilization 0.85
       --enforce-eager
     restart: unless-stopped
     healthcheck:
@@ -315,17 +273,20 @@ services:
   vllm-qwen3vl:
     image: vllm/vllm-openai:latest
     container_name: vllm-qwen3vl
+    ports:
+      - "8002:8000"  # Expose directly for testing
     networks:
-      - vllm-internal        # NO internet access (internal=true)
+      - default              # TEMP: Allow internet to download model
+      # - vllm-internal      # NO internet access (internal=true) - ENABLE AFTER FIRST RUN
       - llamaindex_internal  # Accessible from LlamaIndex
     volumes:
-      - C:\Users\bybso\vllm\models\hub:/root/.cache/huggingface/hub
+      - ./models:/root/.cache/huggingface
     environment:
       - HF_HUB_DISABLE_TELEMETRY=1
       - DO_NOT_TRACK=1
       - VLLM_USAGE_SOURCE=production-docker-isolated
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
+      # - HF_HUB_OFFLINE=1      # TEMP DISABLED - allow download
+      # - TRANSFORMERS_OFFLINE=1  # TEMP DISABLED - allow download
     deploy:
       resources:
         reservations:
@@ -339,13 +300,12 @@ services:
       --served-model-name Qwen/Qwen3-VL-30B-A3B-Instruct
       --host 0.0.0.0
       --port 8000
-      --max-model-len 8192
-      --gpu-memory-utilization 0.92
+      --max-model-len 32768
+      --gpu-memory-utilization 0.90
       --trust-remote-code
-      --max-num-seqs 5
+      --max-num-seqs 8
       --quantization awq
-      --enable-prefix-caching
-      --max-num-batched-tokens 8192
+      --enforce-eager
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -365,17 +325,20 @@ services:
   vllm-qwen3vl-4b:
     image: vllm/vllm-openai:latest
     container_name: vllm-qwen3vl-4b
+    ports:
+      - "8005:8000"  # Expose directly for testing
     networks:
-      - vllm-internal        # NO internet access (internal=true)
+      - default              # TEMP: Allow internet to download model
+      # - vllm-internal      # NO internet access - ENABLE AFTER FIRST RUN
       - llamaindex_internal  # Accessible from LlamaIndex
     volumes:
-      - C:\Users\bybso\vllm\models\hub:/root/.cache/huggingface/hub
+      - ./models:/root/.cache/huggingface
     environment:
       - HF_HUB_DISABLE_TELEMETRY=1
       - DO_NOT_TRACK=1
       - VLLM_USAGE_SOURCE=production-docker-isolated
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
+      # - HF_HUB_OFFLINE=1      # TEMP DISABLED - allow download
+      # - TRANSFORMERS_OFFLINE=1  # TEMP DISABLED - allow download
     deploy:
       resources:
         reservations:
@@ -389,12 +352,11 @@ services:
       --served-model-name Qwen/Qwen3-VL-4B-Instruct
       --host 0.0.0.0
       --port 8000
-      --max-model-len 8192
-      --gpu-memory-utilization 0.75
+      --max-model-len 32768
+      --gpu-memory-utilization 0.5
       --trust-remote-code
-      --max-num-seqs 3
-      --enable-prefix-caching
-      --max-num-batched-tokens 8192
+      --max-num-seqs 8
+      --enforce-eager
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -421,7 +383,7 @@ services:
       - default        # Allows port exposure to host
       - vllm-internal  # Can talk to vllm containers
     volumes:
-      - C:\Users\bybso\vllm\nginx-config\nginx-multi-model.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx-config/nginx-multi-model.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
