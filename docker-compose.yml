@@ -357,10 +357,11 @@ services:
       - qwen3vl
 
   # =========================================================================
-  # QWEN3-VL-4B MODEL (Qwen3-VL-4B-Instruct)
-  # Smaller, faster vision-language model - ideal for page comparison tasks
-  # 4B params - much faster inference than 30B while maintaining good accuracy
+  # QWEN3-VL-4B MODEL - STANDALONE MODE (High Performance)
+  # Optimized for maximum performance when running alone
+  # Uses 24GB VRAM (75% utilization) - NOT compatible with marker
   # Access via: http://localhost:8005/v1/...
+  # Usage: docker-compose --profile qwen3vl-4b up -d vllm-qwen3vl-4b
   # =========================================================================
   vllm-qwen3vl-4b:
     image: vllm/vllm-openai:latest
@@ -404,6 +405,57 @@ services:
       start_period: 120s
     profiles:
       - qwen3vl-4b
+
+  # =========================================================================
+  # QWEN3-VL-4B MODEL - SHARED MODE (Memory Efficient)
+  # Optimized for running alongside marker container
+  # Uses 16GB VRAM (50% utilization) - Compatible with marker (5-6GB) + working memory (8GB)
+  # Trade-offs: 4K context (vs 8K), 2 concurrent requests (vs 3)
+  # Access via: http://localhost:8005/v1/...
+  # Usage: docker-compose --profile qwen3vl-4b-shared up -d vllm-qwen3vl-4b-shared
+  # =========================================================================
+  vllm-qwen3vl-4b-shared:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-qwen3vl-4b
+    networks:
+      - vllm-internal        # NO internet access (internal=true)
+      - llamaindex_internal  # Accessible from LlamaIndex
+    volumes:
+      - C:\Users\bybso\vllm\models\hub:/root/.cache/huggingface/hub
+    environment:
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - DO_NOT_TRACK=1
+      - VLLM_USAGE_SOURCE=production-docker-isolated
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    command: >
+      --model Qwen/Qwen3-VL-4B-Instruct
+      --served-model-name Qwen/Qwen3-VL-4B-Instruct
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 4096
+      --gpu-memory-utilization 0.50
+      --trust-remote-code
+      --max-num-seqs 2
+      --enable-prefix-caching
+      --max-num-batched-tokens 4096
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    profiles:
+      - qwen3vl-4b-shared
 
   # =========================================================================
   # NGINX GATEWAY (EXTERNAL ACCESS POINT)
