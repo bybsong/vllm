@@ -1,0 +1,45 @@
+# Use a clean NVIDIA CUDA base image instead of the vLLM image
+# This avoids conflicts with pre-installed stable libraries (flashinfer, xformers)
+# and matches the "fresh install" approach of the official recipe.
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+# Force V0 engine (V1 engine has KV cache calculation bugs with HunyuanOCR)
+ENV VLLM_USE_V1=0
+
+# Install system dependencies (Python 3.10 is standard on Ubuntu 22.04)
+# Also install build tools needed for vLLM compilation
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3.10-dev \
+    git \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink python3 to python
+RUN ln -s /usr/bin/python3.10 /usr/bin/python
+
+# Install pip
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python
+
+# Install uv (as recommended in the official guide)
+RUN pip install --no-cache-dir uv
+
+# Install dependencies for vLLM
+# 1. vLLM Nightly (as per recipe - using uv pip as recommended)
+# 2. Transformers from source (as per recipe)
+RUN uv pip install --system vllm --pre --extra-index-url https://wheels.vllm.ai/nightly && \
+    pip install --no-cache-dir git+https://github.com/huggingface/transformers@82a06db03535c49aa987719ed0746a76093b1ec4
+
+# Create a wrapper script that explicitly sets VLLM_USE_V1=0 before running
+RUN echo '#!/bin/bash\n\
+export VLLM_USE_V1=0\n\
+exec python -m vllm.entrypoints.openai.api_server "$@"' > /usr/local/bin/vllm-serve-v0 && \
+    chmod +x /usr/local/bin/vllm-serve-v0
+
+# Use our wrapper script that forces V0
+ENTRYPOINT ["/usr/local/bin/vllm-serve-v0"]
